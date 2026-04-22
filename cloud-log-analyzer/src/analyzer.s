@@ -1,10 +1,11 @@
 /*
-Autor: Equipo docente (base para estudiantes)
-Curso: Arquitectura de Computadoras / Ensamblador ARM64
+Autor: Ordoñez Marrufo Anthony
+Curso: Lenguajes de Interfaz
 Práctica: Mini Cloud Log Analyzer (Bash + ARM64 + GNU Make)
 Fecha: 20 de abril de 2026
-Descripción: Lee códigos HTTP desde stdin (uno por línea), clasifica 2xx/4xx/5xx
-             y muestra un reporte en español usando únicamente syscalls Linux.
+Descripción: Lee códigos HTTP desde stdin (uno por línea), clasifica 2xx/4xx/5xx,
+             cuenta códigos inválidos y muestra porcentaje de éxito.
+             Usa únicamente syscalls Linux sin libc.
 */
 
 /*
@@ -42,6 +43,9 @@ msg_2xx:            .asciz "Éxitos 2xx: "
 msg_4xx:            .asciz "Errores 4xx: "
 msg_5xx:            .asciz "Errores 5xx: "
 msg_fin_linea:      .asciz "\n"
+msg_invalidos:      .asciz "Inválidos:   "
+msg_porcentaje:     .asciz "Éxito %:     "
+msg_porciento:      .asciz "%\n"
 
 .section .text
 .global _start
@@ -51,6 +55,7 @@ _start:
     mov x19, #0                  // exitos_2xx
     mov x20, #0                  // errores_4xx
     mov x21, #0                  // errores_5xx
+    mov x28, #0                  // invalidos
 
     // Estado del parser
     mov x22, #0                  // numero_actual
@@ -155,6 +160,38 @@ imprimir_reporte:
     add x0, x0, :lo12:msg_fin_linea
     bl write_cstr
 
+// "Inválidos: " + valor + "\n"
+    adrp x0, msg_invalidos
+    add x0, x0, :lo12:msg_invalidos
+    bl write_cstr
+    mov x0, x28
+    bl print_uint
+    adrp x0, msg_fin_linea
+    add x0, x0, :lo12:msg_fin_linea
+    bl write_cstr
+
+// Calcular porcentaje: (exitos_2xx * 100) / total
+    // total = exitos_2xx + errores_4xx + errores_5xx + invalidos
+    add x0, x19, x20             // x0 = 2xx + 4xx
+    add x0, x0, x21              // x0 = x0 + 5xx
+    add x0, x0, x28              // x0 = x0 + invalidos (total)
+    cbz x0, salida_ok            // si total = 0, evitar division por cero
+
+    mov x1, #100
+    mul x2, x19, x1              // x2 = exitos_2xx * 100
+    udiv x0, x2, x0              // x0 = (exitos_2xx * 100) / total
+
+    // Imprimir "Éxito %: " + porcentaje + "%\n"
+    stp x0, xzr, [sp, #-16]!    // guardar porcentaje en pila
+    adrp x0, msg_porcentaje
+    add x0, x0, :lo12:msg_porcentaje
+    bl write_cstr
+    ldp x0, xzr, [sp], #16      // recuperar porcentaje
+    bl print_uint
+    adrp x0, msg_porciento
+    add x0, x0, :lo12:msg_porciento
+    bl write_cstr
+
 salida_ok:
     mov x0, #0
     mov x8, #SYS_exit
@@ -171,26 +208,30 @@ salida_error:
 // -----------------------------------------------------------------------------
 clasificar_codigo:
     cmp x0, #200
-    b.lt clasificar_fin
+    b.lt codigo_invalido
     cmp x0, #299
     b.gt revisar_4xx
-    add x19, x19, #1
+    add x19, x19, #1             // sumar a 2xx
     b clasificar_fin
 
 revisar_4xx:
     cmp x0, #400
-    b.lt clasificar_fin
+    b.lt codigo_invalido
     cmp x0, #499
     b.gt revisar_5xx
-    add x20, x20, #1
+    add x20, x20, #1             // sumar a 4xx
     b clasificar_fin
 
 revisar_5xx:
     cmp x0, #500
-    b.lt clasificar_fin
+    b.lt codigo_invalido
     cmp x0, #599
-    b.gt clasificar_fin
-    add x21, x21, #1
+    b.gt codigo_invalido
+    add x21, x21, #1             // sumar a 5xx
+    b clasificar_fin
+
+codigo_invalido:
+    add x28, x28, #1             // sumar a inválidos
 
 clasificar_fin:
     ret
